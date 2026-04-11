@@ -78,18 +78,44 @@ const UI_IDS=["eb","nsb","scores-btn","scores-btn2","back-btn","polar-btn"];
 function isUITarget(e){let el=e.target;while(el&&el!==root){if(el.id&&UI_IDS.includes(el.id))return true;if(el.dataset&&el.dataset.t)return true;el=el.parentElement;}return false;}
 
 const polar={connected:false,device:null,status:"disconnected"};
-const RSA_WINDOW=6,CV_HOLD_THR=0.018,CV_BREATHE_THR=0.032;
-let rrBuf=[],polarHoldState=false;
+// Detection params
+// Hold start: CV over 6 beats drops below threshold (RSA disappears fast)
+// Hold end: single RR jump > DIFF_THR ms (vagal reflex on first exhale, <1 beat latency)
+//           OR RMSSD over 3 beats > RMSSD_THR (backup for slower responses)
+const CV_WINDOW=6, CV_HOLD_THR=0.018;
+const DIFF_THR=38;        // ms — single successive RR difference triggering breathe
+const RMSSD_WINDOW=3, RMSSD_BREATHE_THR=22; // ms — fast RMSSD backup
+let rrBuf=[],polarHoldState=false,prevRR=null;
+
+function rmssd(arr){
+  if(arr.length<2)return 0;
+  let sum=0;for(let i=1;i<arr.length;i++)sum+=(arr[i]-arr[i-1])**2;
+  return Math.sqrt(sum/(arr.length-1));
+}
 
 function polarHandleRR(ms){
-  rrBuf.push(ms);if(rrBuf.length>RSA_WINDOW+2)rrBuf.shift();
-  if(rrBuf.length<RSA_WINDOW)return;
-  const w=rrBuf.slice(-RSA_WINDOW),mean=w.reduce((a,b)=>a+b,0)/w.length;
-  const sd=Math.sqrt(w.reduce((s,v)=>s+(v-mean)**2,0)/w.length),cv=sd/mean;
-  const bpm=Math.round(60000/mean);
+  rrBuf.push(ms);if(rrBuf.length>CV_WINDOW+2)rrBuf.shift();
+  const bpm=Math.round(60000/ms);
   const hel=document.getElementById("polar-hr");if(hel)hel.textContent=bpm+" bpm";
-  if(!polarHoldState&&cv<CV_HOLD_THR){polarHoldState=true;startHold();}
-  else if(polarHoldState&&cv>CV_BREATHE_THR){polarHoldState=false;endHold();}
+
+  // Hold START: CV drops (RSA disappears within 2-3 beats after breath hold starts)
+  if(!polarHoldState&&rrBuf.length>=CV_WINDOW){
+    const w=rrBuf.slice(-CV_WINDOW),mean=w.reduce((a,b)=>a+b,0)/w.length;
+    const sd=Math.sqrt(w.reduce((s,v)=>s+(v-mean)**2,0)/w.length),cv=sd/mean;
+    if(cv<CV_HOLD_THR){polarHoldState=true;startHold();}
+  }
+
+  // Hold END: fast dual-path detection
+  if(polarHoldState){
+    // Path 1: single large RR jump = first exhale vagal burst (fastest, ~1 beat)
+    const diff=prevRR!==null?Math.abs(ms-prevRR):0;
+    // Path 2: RMSSD over last 3 beats (catches subtler patterns)
+    const rm=rrBuf.length>=RMSSD_WINDOW?rmssd(rrBuf.slice(-RMSSD_WINDOW)):0;
+    if(diff>DIFF_THR||rm>RMSSD_BREATHE_THR){
+      polarHoldState=false;endHold();
+    }
+  }
+  prevRR=ms;
 }
 function parsePolarHR(data){
   const flags=data.getUint8(0);let offset=(flags&1)?3:2;if(!(flags&16))return;
