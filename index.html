@@ -74,7 +74,7 @@ const loadS=()=>{try{return JSON.parse(localStorage.getItem(SK)||"[]");}catch{re
 const saveS=s=>localStorage.setItem(SK,JSON.stringify(s.slice(-30)));
 const fmtDate=iso=>{const d=new Date(iso);return`${d.getDate()}.${d.getMonth()+1}.${String(d.getFullYear()).slice(2)}`;};
 
-const UI_IDS=["eb","nsb","scores-btn","scores-btn2","back-btn","polar-btn"];
+const UI_IDS=["eb","nsb","scores-btn","scores-btn2","back-btn","polar-btn","hold-btn","start-btn"];
 function isUITarget(e){let el=e.target;while(el&&el!==root){if(el.id&&UI_IDS.includes(el.id))return true;if(el.dataset&&el.dataset.t)return true;el=el.parentElement;}return false;}
 
 const polar={connected:false,device:null,status:"disconnected"};
@@ -237,10 +237,10 @@ function renderCal2(){
     else st.textContent=`Hold ${holdCount}/2 gedaan \u2714 Nog \u00e9\u00e9n keer.`;
   }
 
-  btn.addEventListener('mousedown',e=>{e.preventDefault();startHoldCal();});
-  btn.addEventListener('mouseup',  e=>{e.preventDefault();endHoldCal();});
-  btn.addEventListener('touchstart',e=>{e.preventDefault();startHoldCal();},{passive:false});
-  btn.addEventListener('touchend',  e=>{e.preventDefault();endHoldCal();},{passive:false});
+  btn.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation();startHoldCal();});
+  btn.addEventListener('mouseup',  e=>{e.preventDefault();e.stopPropagation();endHoldCal();});
+  btn.addEventListener('touchstart',e=>{e.preventDefault();e.stopPropagation();startHoldCal();},{passive:false});
+  btn.addEventListener('touchend',  e=>{e.preventDefault();e.stopPropagation();endHoldCal();},{passive:false});
 }
 
 function renderCalDone(){
