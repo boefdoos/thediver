@@ -286,8 +286,15 @@ async function connectPolar(){
     dev.addEventListener("gattserverdisconnected",()=>{polar.connected=false;polar.status="disconnected";polarHoldState=false;calDone=false;renderReady();});
     renderCalibration();
   }catch(e){
-    polar.status=e.name==="NotFoundError"?"disconnected":"error";
-    updatePolarUI();console.error("Polar connect error:",e.name,e.message);
+    if(e.name==="NotFoundError"){polar.status="disconnected";}
+    else{polar.status="error";}
+    updatePolarUI();
+    if(e.name==="NetworkError"){
+      // Most likely: device already connected to another app/device
+      const lbl=document.getElementById("polar-lbl");
+      if(lbl)lbl.textContent="Verbinding mislukt: verbreek Polar in andere apps";
+    }
+    console.error("Polar connect error:",e.name,e.message);
   }
 }
 function updatePolarUI(){
