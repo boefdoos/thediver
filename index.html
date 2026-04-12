@@ -78,16 +78,17 @@ const UI_IDS=["eb","nsb","scores-btn","scores-btn2","back-btn","polar-btn"];
 function isUITarget(e){let el=e.target;while(el&&el!==root){if(el.id&&UI_IDS.includes(el.id))return true;if(el.dataset&&el.dataset.t)return true;el=el.parentElement;}return false;}
 
 const polar={connected:false,device:null,status:"disconnected"};
-// Detection — dual-path, tuned for minimal latency
-// Hold START: fast-path (2 near-identical RRs) OR 4-beat CV window
-// Hold END:   single RR jump >22ms (vagal exhale burst) OR RMSSD>14ms
-// Refractory: 1.2s after end before new start (prevents bounce)
-const CV_WINDOW=4, CV_HOLD_THR=0.016;
-const FAST_START_DIFF=10;  // ms: 2 consecutive RRs this close = RSA already gone
-const DIFF_THR=22;         // ms: single RR jump triggers end-of-hold
-const RMSSD_WINDOW=3, RMSSD_BREATHE_THR=14;
+// Detection — dual-path with personal calibration
+// Holds are post-EXHALE: hold ends with an INHALE (RR shortens, HR accelerates)
+// Baseline thresholds — overridden after calibration
+const CV_WINDOW=4;
 const REFRACTORY_MS=1200;
+let CV_HOLD_THR=0.016, FAST_START_DIFF=10, DIFF_THR=22, RMSSD_BREATHE_THR=14;
 let rrBuf=[],polarHoldState=false,prevRR=null,lastEndT=0;
+
+// Calibration state
+let calBuf=[],calDone=false,calPhase=0,calT0=0;
+const CAL_PHASE1=25000; // ms of quiet breathing to measure baseline
 
 function rmssd(arr){
   if(arr.length<2)return 0;
@@ -101,7 +102,16 @@ function polarHandleRR(ms){
   const hel=document.getElementById("polar-hr");if(hel)hel.textContent=bpm+" bpm";
   const diff=prevRR!==null?Math.abs(ms-prevRR):999;
 
-  // Hold START
+  // Feed calibration buffer during phase 1
+  if(!calDone&&calPhase===1){
+    calBuf.push({ms,diff:prevRR!==null?diff:null,t:nowT()});
+    updateCalUI();
+    if(nowT()-calT0>CAL_PHASE1) finishCalibration();
+  }
+
+  if(!calDone){prevRR=ms;return;} // don't detect holds until calibrated
+
+  // Hold START (post-exhale: RSA disappears as breath is held after full exhale)
   if(!polarHoldState&&(nowT()-lastEndT)>REFRACTORY_MS){
     const fastStart=diff<FAST_START_DIFF;
     let cvStart=false;
@@ -113,7 +123,8 @@ function polarHandleRR(ms){
     if(fastStart||cvStart){polarHoldState=true;startHold();}
   }
 
-  // Hold END
+  // Hold END: inhale after post-exhale hold = RR shortens (HR accelerates)
+  // Both a sudden diff AND classic RMSSD spike signal the first inhale
   if(polarHoldState){
     const rm=rrBuf.length>=RMSSD_WINDOW?rmssd(rrBuf.slice(-RMSSD_WINDOW)):0;
     if(diff>DIFF_THR||rm>RMSSD_BREATHE_THR){
@@ -121,6 +132,86 @@ function polarHandleRR(ms){
     }
   }
   prevRR=ms;
+}
+
+function finishCalibration(){
+  // Compute personal thresholds from quiet-breathing baseline
+  const diffs=calBuf.map(b=>b.diff).filter(d=>d!==null&&d<300);
+  const rrs=calBuf.map(b=>b.ms).filter(r=>r>300&&r<2000);
+  if(diffs.length<20||rrs.length<20){updateCalUI('retry');return;}
+
+  const meanDiff=diffs.reduce((a,b)=>a+b,0)/diffs.length;
+  const sdDiff=Math.sqrt(diffs.reduce((s,v)=>s+(v-meanDiff)**2,0)/diffs.length);
+  const meanRR=rrs.reduce((a,b)=>a+b,0)/rrs.length;
+  // CV of baseline
+  const sdRR=Math.sqrt(rrs.reduce((s,v)=>s+(v-meanRR)**2,0)/rrs.length);
+  const baseCv=sdRR/meanRR;
+
+  // Thresholds: hold CV = ~35-50% of rest CV; diff threshold = 1.6x baseline mean diff
+  CV_HOLD_THR=Math.max(0.008, Math.min(0.022, baseCv*0.45));
+  DIFF_THR=Math.max(15, Math.min(50, Math.round(meanDiff*1.6+sdDiff)));
+  FAST_START_DIFF=Math.max(5, Math.min(14, Math.round(meanDiff*0.35)));
+  RMSSD_BREATHE_THR=Math.max(10, Math.min(22, Math.round(meanDiff*1.2)));
+
+  calDone=true;
+  console.log(`Cal: baseCv=${baseCv.toFixed(4)} meanDiff=${meanDiff.toFixed(1)}ms → CV_THR=${CV_HOLD_THR.toFixed(4)} DIFF_THR=${DIFF_THR}ms FAST=${FAST_START_DIFF}ms`);
+  renderCalDone();
+}
+
+function updateCalUI(state){
+  const el=document.getElementById('cal-status');
+  if(!el)return;
+  const pct=Math.min(100,Math.round((nowT()-calT0)/CAL_PHASE1*100));
+  if(state==='retry'){
+    el.textContent='Te weinig data — adem nog even rustig...';
+    calBuf=[];calT0=nowT();
+    return;
+  }
+  el.textContent=`Meten... ${pct}%`;
+  const bar=document.getElementById('cal-bar');
+  if(bar)bar.style.width=pct+'%';
+}
+
+function renderCalibration(){
+  screen='calibrating';
+  root.innerHTML=`
+  <div style="position:absolute;inset:0;background:linear-gradient(180deg,#05101e,#020a16);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 24px;text-align:center;">
+    <p style="font-size:11px;letter-spacing:5px;color:#2a4a62;text-transform:uppercase;margin-bottom:16px;">Polar verbonden</p>
+    <h2 style="font-size:28px;font-weight:100;color:rgba(255,255,255,.88);letter-spacing:2px;margin-bottom:10px;">Kalibratie</h2>
+    <p style="font-size:15px;color:#3a6888;line-height:1.9;margin-bottom:8px;">Adem rustig en ontspannen.<br>Denk niet aan je ademhaling.</p>
+    <p style="font-size:13px;color:#2a4a5a;margin-bottom:28px;">De app leert je hartslagpatroon kennen.</p>
+    <div style="width:100%;max-width:260px;height:4px;background:rgba(255,255,255,.06);border-radius:2px;margin-bottom:12px;overflow:hidden;">
+      <div id="cal-bar" style="height:100%;width:0%;background:#3a8ab5;border-radius:2px;transition:width .3s linear;"></div>
+    </div>
+    <p id="cal-status" style="font-size:13px;color:rgba(60,120,160,.6);letter-spacing:1px;">Meten... 0%</p>
+    <div style="margin-top:24px;padding:14px 18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;max-width:280px;">
+      <p style="font-size:12px;color:#2a5878;line-height:1.8;">Houd vast na een <span style="color:rgba(120,200,255,.7);">volledige uitademing</span>.<br>Laat los bij de eerste <span style="color:rgba(120,200,255,.7);">inademing</span>.</p>
+    </div>
+    ${polar.connected?`<div style="position:absolute;top:16px;right:18px;font-size:10px;color:rgba(38,200,130,.5);" id="polar-hr"></div>`:''}
+  </div>`;
+  calBuf=[];calT0=nowT();calPhase=1;
+}
+
+function renderCalDone(){
+  const hrEl=document.getElementById('polar-hr');
+  const hrText=hrEl?hrEl.textContent:'';
+  root.innerHTML=`
+  <div style="position:absolute;inset:0;background:linear-gradient(180deg,#05101e,#020a16);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 24px;text-align:center;">
+    <p style="font-size:11px;letter-spacing:5px;color:#2a4a62;text-transform:uppercase;margin-bottom:16px;">Kalibratie voltooid</p>
+    <div style="font-size:44px;margin-bottom:10px;">&#x2713;</div>
+    <h2 style="font-size:22px;font-weight:100;color:rgba(255,255,255,.88);margin-bottom:18px;">Klaar om te duiken</h2>
+    <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 20px;max-width:280px;margin-bottom:26px;">
+      <p style="font-size:12px;color:#3a6888;line-height:2;">Detectiedrempels afgesteld<br>
+      <span style="color:rgba(100,180,220,.6);font-size:11px;">CV drempel: ${CV_HOLD_THR.toFixed(4)} &nbsp; Sprong: ${DIFF_THR}ms</span></p>
+    </div>
+    <div style="background:rgba(38,120,80,.06);border:1px solid rgba(38,180,100,.12);border-radius:10px;padding:13px 18px;max-width:280px;margin-bottom:28px;">
+      <p style="font-size:13px;color:rgba(100,200,140,.7);line-height:1.9;">Adem volledig <strong style="color:rgba(120,220,160,.85);">uit</strong><br>Houd vast &rarr; duiker daalt<br>Eerste <strong style="color:rgba(120,220,160,.85);">inademing</strong> &rarr; duiker stijgt</p>
+    </div>
+    <button id="start-btn" style="padding:13px 32px;background:rgba(58,138,181,.18);border:1px solid rgba(74,138,181,.45);border-radius:8px;color:#5a9ac5;font-size:13px;letter-spacing:3px;cursor:pointer;text-transform:uppercase;font-family:inherit;">Starten</button>
+    ${polar.connected?`<div style="position:absolute;top:16px;right:18px;font-size:10px;color:rgba(38,200,130,.5);">${hrText}</div>`:''}
+  </div>`;
+  const sb=document.getElementById('start-btn');
+  if(sb)sb.addEventListener('click',()=>renderReady());
 }
 function parsePolarHR(data){
   const flags=data.getUint8(0);let offset=(flags&1)?3:2;if(!(flags&16))return;
@@ -141,8 +232,9 @@ async function connectPolar(){
     chr.addEventListener("characteristicvaluechanged",e=>parsePolarHR(e.target.value));
     await chr.startNotifications();
     polar.connected=true;polar.status="connected";
-    dev.addEventListener("gattserverdisconnected",()=>{polar.connected=false;polar.status="disconnected";polarHoldState=false;updatePolarUI();});
-    updatePolarUI();
+    dev.addEventListener("gattserverdisconnected",()=>{polar.connected=false;polar.status="disconnected";polarHoldState=false;calDone=false;renderReady();});
+    // Start calibration instead of returning to ready screen
+    renderCalibration();
   }catch(e){
     polar.status=e.name==="NotFoundError"?"disconnected":"error";
     updatePolarUI();console.warn("Polar:",e.message);
@@ -260,7 +352,7 @@ function loop(ts){
   const mx=document.getElementById("mx");if(mx)mx.textContent="max "+Math.round(gs.maxDepth)+"m";
   const pf=document.getElementById("pf");if(pf){const pc=pCol(gs.pressure);pf.style.height=Math.round(gs.pressure)+"%";pf.style.background=rgb(pc);}
   const pl=document.getElementById("pl");if(pl){const pr=effectivePR()/BASE_PR,ad=1-pr,r=Math.round(lerp(68,38,ad)),g=Math.round(lerp(128,188,ad)),bl=Math.round(lerp(168,128,ad));pl.style.color=`rgba(${r},${g},${bl},${lerp(.3,.55,ad)})`;}
-  const sl=document.getElementById("sl");if(sl){sl.style.color=isHolding?"rgba(135,205,255,.65)":"rgba(200,120,70,.5)";sl.textContent=polar.connected?(isHolding?"vasthouden \u2665":"stijgen \u2665"):isHolding?"vasthouden":"stijgen";}
+  const sl=document.getElementById("sl");if(sl){sl.style.color=isHolding?"rgba(135,205,255,.65)":"rgba(200,120,70,.5)";sl.textContent=polar.connected?(isHolding?"vasthouden \u2665":"inademen \u2665"):isHolding?"vasthouden":"inademen";}
   const rem=Math.max(0,timeLimit-(ts-gs.sessionStart)/1000);
   const tm=document.getElementById("tm");if(tm){tm.textContent=`${Math.floor(rem/60)}:${Math.floor(rem%60).toString().padStart(2,"0")}`;tm.style.color=rem<30?"rgba(255,110,70,.9)":"rgba(255,255,255,.3)";}
   if(rem<=0){endSession();return;}
@@ -296,7 +388,7 @@ function renderScores(){
 
 function renderReady(){
   screen="ready";const best=sessions.length?Math.max(...sessions.map(s=>s.maxDepth)):null,last=sessions.length?sessions[sessions.length-1]:null;
-  root.innerHTML=`<div style="position:absolute;inset:0;background:linear-gradient(180deg,#06121f,#020910);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;"><p style="font-size:11px;letter-spacing:5px;color:#2a4a62;text-transform:uppercase;margin-bottom:12px;">Ademtraining</p><h1 style="font-size:52px;font-weight:100;color:rgba(255,255,255,.92);letter-spacing:3px;margin-bottom:8px;">The Diver</h1><p style="font-size:15px;color:#3a5878;line-height:1.9;margin-bottom:18px;">Tik en houd vast om te dalen.<br>Laat los om te ademen.<br><span style="color:#223650;font-size:13px;">Er is iets te ontdekken onderweg.</span></p><p style="font-size:10px;letter-spacing:3px;color:#2a4a62;text-transform:uppercase;margin-bottom:9px;">Tijdslimiet</p><div style="display:flex;gap:10px;margin-bottom:16px;"><button data-t="5" style="${btnS(timeLimit===300)}">5 min</button><button data-t="10" style="${btnS(timeLimit===600)}">10 min</button></div><button id="polar-btn" style="padding:8px 18px;border-radius:7px;font-size:11px;letter-spacing:2px;text-transform:uppercase;cursor:pointer;font-family:inherit;background:transparent;border:1px solid rgba(74,138,181,.3);color:rgba(74,138,181,.5);margin-bottom:14px;"><span id="polar-lbl">Polar H10 verbinden</span><span id="polar-hr" style="margin-left:8px;font-size:10px;opacity:.7;"></span></button>${best!==null?`<div style="background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:11px 20px;display:flex;justify-content:space-between;align-items:center;width:100%;max-width:290px;margin-bottom:12px;"><div><div style="font-size:9px;letter-spacing:2px;color:#2a4a60;text-transform:uppercase;margin-bottom:2px;">Record</div><div style="font-size:26px;font-weight:100;color:#f0c040;">${best}m</div></div>${last?`<div style="text-align:right;"><div style="font-size:9px;letter-spacing:2px;color:#2a4a60;text-transform:uppercase;margin-bottom:2px;">Laatste</div><div style="font-size:26px;font-weight:100;color:rgba(255,255,255,.8);">${last.maxDepth}m</div></div>`:""}</div><button id="scores-btn" style="font-size:11px;letter-spacing:3px;color:rgba(74,138,181,.5);background:transparent;border:none;cursor:pointer;font-family:inherit;text-transform:uppercase;padding:5px 0;">Scores bekijken</button>`:`<div style="height:8px;"></div>`}</div>`;
+  root.innerHTML=`<div style="position:absolute;inset:0;background:linear-gradient(180deg,#06121f,#020910);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;"><p style="font-size:11px;letter-spacing:5px;color:#2a4a62;text-transform:uppercase;margin-bottom:12px;">Ademtraining</p><h1 style="font-size:52px;font-weight:100;color:rgba(255,255,255,.92);letter-spacing:3px;margin-bottom:8px;">The Diver</h1><p style="font-size:15px;color:#3a5878;line-height:1.9;margin-bottom:18px;">Adem volledig uit, houd vast om te dalen.<br>Eerste inademing om te stijgen.<br><span style="color:#223650;font-size:13px;">Er is iets te ontdekken onderweg.</span></p><p style="font-size:10px;letter-spacing:3px;color:#2a4a62;text-transform:uppercase;margin-bottom:9px;">Tijdslimiet</p><div style="display:flex;gap:10px;margin-bottom:16px;"><button data-t="5" style="${btnS(timeLimit===300)}">5 min</button><button data-t="10" style="${btnS(timeLimit===600)}">10 min</button></div><button id="polar-btn" style="padding:8px 18px;border-radius:7px;font-size:11px;letter-spacing:2px;text-transform:uppercase;cursor:pointer;font-family:inherit;background:transparent;border:1px solid rgba(74,138,181,.3);color:rgba(74,138,181,.5);margin-bottom:14px;"><span id="polar-lbl">Polar H10 verbinden</span><span id="polar-hr" style="margin-left:8px;font-size:10px;opacity:.7;"></span></button>${best!==null?`<div style="background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:11px 20px;display:flex;justify-content:space-between;align-items:center;width:100%;max-width:290px;margin-bottom:12px;"><div><div style="font-size:9px;letter-spacing:2px;color:#2a4a60;text-transform:uppercase;margin-bottom:2px;">Record</div><div style="font-size:26px;font-weight:100;color:#f0c040;">${best}m</div></div>${last?`<div style="text-align:right;"><div style="font-size:9px;letter-spacing:2px;color:#2a4a60;text-transform:uppercase;margin-bottom:2px;">Laatste</div><div style="font-size:26px;font-weight:100;color:rgba(255,255,255,.8);">${last.maxDepth}m</div></div>`:""}</div><button id="scores-btn" style="font-size:11px;letter-spacing:3px;color:rgba(74,138,181,.5);background:transparent;border:none;cursor:pointer;font-family:inherit;text-transform:uppercase;padding:5px 0;">Scores bekijken</button>`:`<div style="height:8px;"></div>`}</div>`;
   root.querySelectorAll("[data-t]").forEach(btn=>{btn.addEventListener("click",e=>{e.stopPropagation();timeLimit=parseInt(btn.dataset.t)*60;root.querySelectorAll("[data-t]").forEach(b=>{const s=b.dataset.t===btn.dataset.t;b.style.background=s?"rgba(74,138,181,0.22)":"transparent";b.style.borderColor=s?"rgba(74,138,181,0.55)":"rgba(255,255,255,0.09)";b.style.color=s?"#5a9ac5":"rgba(100,140,170,0.4)";});});});
   const sb=document.getElementById("scores-btn");if(sb)sb.addEventListener("click",e=>{e.stopPropagation();renderScores();});
   const pb=document.getElementById("polar-btn");
@@ -322,8 +414,8 @@ function renderComplete(){
 function shouldBlock(e){if(screen==="scores")return true;let el=e.target;while(el&&el!==root){if(el.id&&UI_IDS.includes(el.id))return true;if(el.dataset&&el.dataset.t)return true;el=el.parentElement;}return false;}
 function manualOK(){return!polar.connected;}
 
-root.addEventListener("touchstart",e=>{if(shouldBlock(e))return;e.preventDefault();if(manualOK())startHold();},{passive:false});
-root.addEventListener("touchend",  e=>{if(shouldBlock(e))return;e.preventDefault();if(manualOK())endHold();},{passive:false});
+root.addEventListener("touchstart",e=>{if(shouldBlock(e)||screen==="calibrating")return;e.preventDefault();if(manualOK())startHold();},{passive:false});
+root.addEventListener("touchend",  e=>{if(shouldBlock(e)||screen==="calibrating")return;e.preventDefault();if(manualOK())endHold();},{passive:false});
 root.addEventListener("mousedown",e=>{if(shouldBlock(e))return;if(manualOK())startHold();});
 root.addEventListener("mouseup",  ()=>{if(screen!=="scores"&&manualOK())endHold();});
 root.addEventListener("mouseleave",()=>{if(screen!=="scores"&&manualOK())endHold();});
