@@ -273,7 +273,7 @@ async function connectPolar(){
   polar.status="connecting";updatePolarUI();
   try{
     const dev=await navigator.bluetooth.requestDevice({
-      filters:[{services:["heart_rate"]},{namePrefix:"Polar"}],
+      filters:[{namePrefix:"Polar"}],
       optionalServices:["heart_rate"],
     });
     polar.device=dev;
@@ -287,7 +287,7 @@ async function connectPolar(){
     renderCalibration();
   }catch(e){
     polar.status=e.name==="NotFoundError"?"disconnected":"error";
-    updatePolarUI();console.warn("Polar:",e.message);
+    updatePolarUI();console.error("Polar connect error:",e.name,e.message);
   }
 }
 function updatePolarUI(){
