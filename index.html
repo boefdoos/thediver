@@ -430,7 +430,9 @@ function startHold(){
     gs.active=true;screen="playing";gs.sessionStart=nowT();gs.lastTs=null;
     renderPlaying();
     setTimeout(()=>{const c=document.getElementById("gc");if(c){c.width=c.offsetWidth;c.height=c.offsetHeight;}rafId=requestAnimationFrame(loop);},20);
-    if(polar.connected&&polarHoldState){gs.holding=true;gs.holdStart=nowT();isHolding=true;}
+    // Always begin holding immediately — touch means finger is down, Polar means hold detected
+    gs.holding=true;gs.holdStart=nowT();isHolding=true;
+    if(polar.connected)polarHoldState=true;
     return;
   }
   if(!gs.holding){
