@@ -78,14 +78,16 @@ const UI_IDS=["eb","nsb","scores-btn","scores-btn2","back-btn","polar-btn"];
 function isUITarget(e){let el=e.target;while(el&&el!==root){if(el.id&&UI_IDS.includes(el.id))return true;if(el.dataset&&el.dataset.t)return true;el=el.parentElement;}return false;}
 
 const polar={connected:false,device:null,status:"disconnected"};
-// Detection params
-// Hold start: CV over 6 beats drops below threshold (RSA disappears fast)
-// Hold end: single RR jump > DIFF_THR ms (vagal reflex on first exhale, <1 beat latency)
-//           OR RMSSD over 3 beats > RMSSD_THR (backup for slower responses)
-const CV_WINDOW=6, CV_HOLD_THR=0.018;
-const DIFF_THR=38;        // ms — single successive RR difference triggering breathe
-const RMSSD_WINDOW=3, RMSSD_BREATHE_THR=22; // ms — fast RMSSD backup
-let rrBuf=[],polarHoldState=false,prevRR=null;
+// Detection — dual-path, tuned for minimal latency
+// Hold START: fast-path (2 near-identical RRs) OR 4-beat CV window
+// Hold END:   single RR jump >22ms (vagal exhale burst) OR RMSSD>14ms
+// Refractory: 1.2s after end before new start (prevents bounce)
+const CV_WINDOW=4, CV_HOLD_THR=0.016;
+const FAST_START_DIFF=10;  // ms: 2 consecutive RRs this close = RSA already gone
+const DIFF_THR=22;         // ms: single RR jump triggers end-of-hold
+const RMSSD_WINDOW=3, RMSSD_BREATHE_THR=14;
+const REFRACTORY_MS=1200;
+let rrBuf=[],polarHoldState=false,prevRR=null,lastEndT=0;
 
 function rmssd(arr){
   if(arr.length<2)return 0;
@@ -97,22 +99,25 @@ function polarHandleRR(ms){
   rrBuf.push(ms);if(rrBuf.length>CV_WINDOW+2)rrBuf.shift();
   const bpm=Math.round(60000/ms);
   const hel=document.getElementById("polar-hr");if(hel)hel.textContent=bpm+" bpm";
+  const diff=prevRR!==null?Math.abs(ms-prevRR):999;
 
-  // Hold START: CV drops (RSA disappears within 2-3 beats after breath hold starts)
-  if(!polarHoldState&&rrBuf.length>=CV_WINDOW){
-    const w=rrBuf.slice(-CV_WINDOW),mean=w.reduce((a,b)=>a+b,0)/w.length;
-    const sd=Math.sqrt(w.reduce((s,v)=>s+(v-mean)**2,0)/w.length),cv=sd/mean;
-    if(cv<CV_HOLD_THR){polarHoldState=true;startHold();}
+  // Hold START
+  if(!polarHoldState&&(nowT()-lastEndT)>REFRACTORY_MS){
+    const fastStart=diff<FAST_START_DIFF;
+    let cvStart=false;
+    if(rrBuf.length>=CV_WINDOW){
+      const w=rrBuf.slice(-CV_WINDOW),mean=w.reduce((a,b)=>a+b,0)/w.length;
+      const sd=Math.sqrt(w.reduce((s,v)=>s+(v-mean)**2,0)/w.length);
+      cvStart=(sd/mean)<CV_HOLD_THR;
+    }
+    if(fastStart||cvStart){polarHoldState=true;startHold();}
   }
 
-  // Hold END: fast dual-path detection
+  // Hold END
   if(polarHoldState){
-    // Path 1: single large RR jump = first exhale vagal burst (fastest, ~1 beat)
-    const diff=prevRR!==null?Math.abs(ms-prevRR):0;
-    // Path 2: RMSSD over last 3 beats (catches subtler patterns)
     const rm=rrBuf.length>=RMSSD_WINDOW?rmssd(rrBuf.slice(-RMSSD_WINDOW)):0;
     if(diff>DIFF_THR||rm>RMSSD_BREATHE_THR){
-      polarHoldState=false;endHold();
+      polarHoldState=false;lastEndT=nowT();endHold();
     }
   }
   prevRR=ms;
@@ -211,12 +216,15 @@ function drawTexts(ctx,w,h){
   const n=nowT();gs.texts=gs.texts.filter(t=>{
     const pr=(n-t.t0)/1000/t.dur;if(pr>=1)return false;
     let a;if(pr<.12)a=pr/.12;else if(pr<.65)a=1;else a=1-(pr-.65)/.35;
-    if(t.depth){ctx.save();ctx.globalAlpha=a*.9;ctx.font="600 22px system-ui";ctx.textAlign="center";ctx.fillStyle=rgb(t.col);ctx.fillText(t.depth,w/2,h*.82);ctx.restore();}
-    ctx.save();ctx.globalAlpha=a*(t.depth?.72:.62);ctx.font=`${t.depth?16:14}px system-ui`;ctx.textAlign="center";ctx.fillStyle=t.depth?"rgb(215,240,255)":"rgb(155,205,255)";ctx.fillText(t.msg,w/2,h*.82+(t.depth?26:0));ctx.restore();
+    if(t.depth){ctx.save();ctx.globalAlpha=a*.9;ctx.font="600 19px system-ui";ctx.textAlign="center";ctx.fillStyle=rgb(t.col);ctx.fillText(t.depth,w/2,h*.87);ctx.restore();}
+    ctx.save();ctx.globalAlpha=a*(t.depth?.72:.62);ctx.font=`${t.depth?14:13}px system-ui`;ctx.textAlign="center";ctx.fillStyle=t.depth?"rgb(215,240,255)":"rgb(155,205,255)";ctx.fillText(t.msg,w/2,h*.87+(t.depth?22:0));ctx.restore();
     return true;
   });
 }
 function drawBubbles(ctx,bs){for(const b of bs){if(b.opacity<.01)continue;ctx.save();ctx.globalAlpha=b.opacity;ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.strokeStyle="rgba(145,215,255,.85)";ctx.lineWidth=.6;ctx.stroke();ctx.restore();}}
+
+// SVG diver — loaded once at startup, drawn on canvas each frame
+const _svgDiver=(()=>{const s=new Image();s.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent('<svg width="864" height="1753" viewBox="0 0 864 1753" xmlns="http://www.w3.org/2000/svg"><path fill="#100f10" d="M 361.973145 73.018311 C 368.599609 69.809082 374.114746 54.481201 378.628723 47.736328 C 410.56955 0.074219 488.010742 13.661011 516.10907 58.451294 C 524.026794 71.089966 528.47406 85.956665 525.16272 100.485474 L 524.785156 102.161133 C 528.792969 105.171753 532.498047 108.064209 536.771667 110.704834 C 531.798218 116.827148 527.019104 111.762085 518.022217 110.616333 C 502.815979 105.991943 482.314758 94.455811 464.400116 94.370117 C 452.466492 92.400146 425.313232 88.175049 416.13681 96.624268 C 407.173431 104.869385 399.769226 132.291138 399.580566 144.807373 C 399.472534 151.998657 399.959869 152.425781 403.343903 157.695801 L 404.200745 158.317139 C 410.572449 163 419.666138 174.571899 426.096436 173.623901 C 443.130371 171.119263 466.882965 119.051392 485.502777 133.131592 C 488.48703 135.383301 490.703979 139.323242 492.801971 142.776489 C 491.704346 147.413086 490.54071 151.187134 492.117371 156.061035 C 495.642761 166.928467 482.514252 193.663208 505.188141 186.32251 L 510.279907 184.713989 C 519.914429 187.868042 519.552246 184.970093 514.417297 192.861328 C 509.254944 194.569946 494.234222 198.296631 492.052216 200.970459 C 492.079559 208.982788 502.51358 212.478027 508.181824 216.378784 C 527.458496 229.649658 547.675659 232.035522 556.064087 256.840088 C 564.218994 280.961426 552.6604 305.60083 548.168762 329.580566 C 540.647888 323.266602 549.038818 300.399658 549.105469 292.323242 C 549.14325 287.165161 548.929688 286.11792 547.989502 281.011719 C 549.050415 271.023071 542.17926 252.650635 534.486084 245.653198 C 521.547119 233.894043 514.628235 243.880615 500.483948 243.84314 L 498.979401 243.825928 C 489.04303 251.940552 490.704468 252.198242 478.261597 258.223511 C 462.615692 255.854736 438.564514 256.203857 434.975281 235.054199 C 426.192993 230.089844 426.872925 237.158569 422.960938 238.515015 C 418.701599 240.922607 419.123474 245.447876 419.89682 249.633179 C 426.203033 252.979736 430.423767 252.599365 436.656738 256.217041 C 445.573639 259.86377 468.299286 263.701416 474.362396 270.593994 C 486.432281 284.302002 492.689484 305.562256 501.243713 321.417236 C 499.806885 329.936646 502.180817 331.869629 502.13028 340.542236 C 502.049011 354.912231 488.786591 370.470825 496.023529 382.578491 C 500.361664 391.421021 499.215271 394.896851 498.414612 398.585815 C 492.020935 404.52002 492.276123 443.031494 490.522736 454.585449 C 498.414612 470.126831 505.024231 477.97876 510.845551 494.891235 C 515.030884 507.077393 514.326904 522.446655 518.675049 530.819458 C 514.444336 547.921021 523.336853 560.472534 519.53009 577.176758 C 525.128601 587.810547 518.691284 594.020508 525.880249 596.079224 C 533.580566 598.284546 543.127563 592.793945 550.178284 598.644287 L 551.673767 601.739624 C 546.174194 613.696167 534.159729 647.206421 540.112427 657.016724 C 549.948792 673.244873 544.88678 692.415527 552.210938 705.590454 L 549.078918 721.759888 C 531.345886 738.823975 531.899963 766.553467 501.207275 774.054749 C 495.57959 769.632141 489.513885 765.104736 484.483734 760.073181 C 488.726074 749.496521 497.900482 740.534485 C 504.846313 712.171631 504.87619 726.650879 493.025635 737.476196 C 485.129333 741.554504 478.480438 738.345886 L 477.925964 737.062073 C 475.34079 730.986084 475.083466 719.711548 478.197815 715.286743 C 491.580017 696.291382 479.760132 685.533813 482.083221 665.361572 C 483.138947 656.182983 490.851898 653.254761 490.637878 644.527588 C 485.092957 624.996582 482.600861 621.317749 C 476.503174 612.303223 480.680298 604.830444 478.702576 600.447144 C 469.263489 579.516113 460.982788 558.705933 452.891968 537.233887 C 446.912903 535.710693 C 440.720703 543.747192 438.85257 557.457031 430.837341 564.863159 C 427.341431 578.718262 393.950043 573.724121 395.376373 568.341675 C 387.435944 566.114014 375.219055 560.110352 369.044312 561.628784 C 363.520081 565.611206 362.249237 584.149536 362.343719 590.928955 C 368.962646 598.315186 375.938934 605.645508 381.889893 613.583008 C 395.222229 631.371948 405.660004 650.681152 415.65921 670.464111 C 424.371124 687.704956 433.454285 705.0271 440.822784 722.887085 C 451.156769 747.954895 459.029999 773.834778 467.84317 799.439331 C 472.156342 811.963196 484.199585 843.367065 483.618164 855.389954 C 482.839142 871.404907 443.543854 911.952759 432.053711 925.789673 C 426.649567 932.291748 422.128021 939.545532 416.835022 946.15686 C 394.928101 973.550964 322.621368 1060.929321 326.050507 1093.874268 C 326.838226 1101.434814 349.877777 1134.494507 355.860016 1141.488525 C 377.546051 1166.806152 429.120087 1173.855469 459.552338 1184.047241 C 479.793579 1190.907471 499.516266 1199.225098 518.561401 1208.928955 C 630.385803 1266.266968 728.496399 1352.871582 820.55658 1437.430664 C 853.844666 1468.352051 C 852.105713 1474.13623 838.488525 1470.768188 833.072266 1470.853271 C 778.806396 1471.704834 754.220886 1502.804932 755.973694 1555.269775 C 750.129639 1571.501465 760.895569 1570.105835 742.467102 1567.429932 C 734.94873 1559.902222 720.237549 1549.341919 711.306458 1542.475952 L 659.599548 1502.400879 C 604.494995 1460.104736 550.464355 1416.428345 497.539185 1371.418945 C 462.76944 1341.512817 422.923676 1307.855957 396.936829 1269.637085 C 376.867981 1240.10083 363.111572 1205.203613 332.786713 1183.540283 C 315.978821 1173.335449 L 313.296783 1173.923096 C 311.878326 1176.651978 317.210815 1207.359863 318.720825 1212.208496 C 331.043091 1251.848877 380.068176 1292.562744 407.360107 1323.721069 C 439.850647 1360.823975 473.070709 1398.364624 503.510162 1437.15625 C 549.126587 1494.831177 591.339417 1555.123047 629.92334 1617.723267 C 635.529053 1626.75293 664.220947 1671.99939 666.512695 1678.691528 C 662.631958 1684.435059 644.226501 1674.795044 C 637.101746 1674.027466 629.130371 1675.825317 622.599915 1674.256592 C 611.441528 1678.866577 597.688477 1685.079712 595.907166 1698.710693 C 582.061707 1700.432983 587.470337 1719.775513 581.973633 1728.372559 C 576.139587 1725.635498 C 574.770142 1721.894409 571.103638 1716.401245 569.17041 1712.468628 C 526.94696 1626.520508 475.717316 1543.706909 415.524109 1469.191528 C 403.476685 1454.270386 391.888153 1436.107178 379.081696 1422.362549 C 337.590607 1377.860596 303.585876 1329.764648 291.997894 1268.851563 C 286.602966 1250.693604 277.179993 1231.821777 266.264252 1216.479492 C 249.100861 1192.420532 223.100723 1180.138184 203.736969 1158.900269 C 193.981384 1146.647095 196.584122 1133.349365 206.014267 1122.187622 C 210.544128 1116.825439 224.651794 1114.59375 226.077454 1105.661621 C 219.212128 1097.343994 C 223.606613 1069.734863 230.535217 1057.555542 260.759674 1057.263916 C 267.420349 1056.962891 267.998016 1046.265625 269.114685 1041.582886 C 280.244537 995.10376 274.663635 947.536804 297.464539 903.851563 C 301.369812 896.362488 307.88385 891.58783 312.812714 884.596741 C 320.600372 873.550842 337.976532 866.417053 343.40744 853.558716 C 311.315582 823.295471 C 281.62384 799.53363 260.070801 774.944885 239.293396 743.033203 C 229.594299 728.139038 220.556229 706.300903 208.912994 693.539063 C 193.231857 676.35376 169.302811 656.008789 155.867386 637.337769 C 144.508087 621.552368 142.510712 579.382935 150.316971 561.029541 C 152.913742 554.921631 160.471008 540.981079 161.44194 536.000732 C 144.074417 535.61731 137.399292 530.714478 C 129.458221 527.863159 C 125.191582 530.202881 108.402573 572.473267 105.327904 580.039917 C 110.420731 585.063232 117.406105 590.255859 C 117.999268 595.731567 C 103.623695 610.990723 102.713432 627.31311 104.323219 646.8573 C 130.333313 680.462524 113.072044 683.087036 125.101471 712.94165 C 120.210663 739.072632 C 106.907104 734.514648 C 101.027725 721.663086 C 100.967865 707.546753 C 98.174629 695.797119 C 90.631401 702.976318 C 89.98484 721.70874 C 97.133217 737.980408 C 101.710518 755.943237 C 102.517189 786.766235 71.554985 770.513977 59.781082 758.632385 L 49.565796 756.523682 C 40.084778 743.855286 35.785202 745.894165 25.216528 737.236816 C 14.115702 710.275391 C 16.82036 695.278809 19.509403 676.401489 24.275362 661.984131 C 29.507767 655.709351 C 32.520645 639.314941 36.110035 627.112427 34.339878 609.927002 C 35.185669 595.643921 C 24.978922 581.09082 32.88327 573.940308 C 41.972305 571.290527 50.79034 577.95813 57.933865 571.460083 C 56.022011 549.775513 68.029991 525.63208 66.783371 503.54541 C 50.780968 480.71228 C 43.592945 469.817505 42.716293 456.880615 47.669956 445.179321 C 58.358913 419.931152 69.262505 394.946045 80.385811 369.9729 L 116.551178 287.781616 C 121.515152 276.63855 126.34787 265.437378 131.048981 254.180054 C 137.948441 237.760864 C 125.509331 230.231323 126.001427 229.745483 132.352554 216.557251 C 136.038818 208.884766 140.222977 200.958008 143.61586 193.118408 C 147.884064 178.227905 C 150.387558 175.159302 158.074463 179.053223 161.465256 178.488647 C 168.233322 177.375244 166.902252 170.458618 169.179169 166.200684 C 183.029099 140.364502 187.750641 111.495483 212.802597 93.262451 C 224.535675 83.718262 239.342911 79.989868 254.268448 80.199951 C 286.407928 70.241943 C 278.23999 60.506104 268.704041 62.125244 259.504486 58.621094 C 264.105499 36.275513 C 272.685608 34.386475 284.505066 48.177124 289.238098 46.162598 C 299.671173 41.718994 307.862762 32.363647 321.124512 48.110352 C 323.461426 64.134644 334.41156 48.677368 345.349182 62.915527 C 338.601105 72.653198 336.538177 78.531006 C 334.091339 82.720215 332.217438 90.659302 331.53244 95.479248 C 307.232513 83.203491 C 297.900665 91.143555 315.963684 103.427979 320.757599 109.723633 C 331.904694 124.349976 340.707001 139.297729 337.69693 158.290649 C 337.430237 184.376587 C 349.284454 181.632446 357.742584 141.95874 358.931427 131.471436 C 347.42804 94.110718 C 342.255554 84.009277 C 346.635345 80.722656 C 348.527527 77.497192 C 354.262787 71.700562 355.046143 81.94873 361.973145 73.018311 Z"/></svg>');return s;})();
 
 function drawDiver(ctx,w,h,ts,depthT,pressT,holding){
   const cx=w/2,cy=h*.5,floatY=holding?0:Math.sin(ts*.002)*lerp(1.2,3.0,depthT);
@@ -224,24 +232,14 @@ function drawDiver(ctx,w,h,ts,depthT,pressT,holding){
   const dgc=diverGlowCol(depthT),gc2=lC([52,142,232],[192,56,20],pressT);
   if(depthT>0.03){
     for(const[r,a] of [[lerp(0,55,depthT),lerp(0,.35,depthT)],[lerp(0,28,depthT),lerp(0,.68,depthT)]]){
-      if(r<1)continue;const g=ctx.createRadialGradient(x,y-20,0,x,y-20,r*2.2);g.addColorStop(0,rgba(dgc,a));g.addColorStop(1,"rgba(0,0,0,0)");ctx.fillStyle=g;ctx.fillRect(x-r*2.5,y-60-r*2,r*5,r*4+60);
+      if(r<1)continue;const g=ctx.createRadialGradient(x,y,0,x,y,r*2.2);g.addColorStop(0,rgba(dgc,a));g.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g;ctx.fillRect(x-r*2.5,y-r*2.5,r*5,r*5);
     }
   }
-  if(pressT>0.05){const pR=lerp(0,40,Math.min(pressT*2,1)),pA=holding?pressT*.42:.1;const g=ctx.createRadialGradient(x,y-20,0,x,y-20,pR*2);g.addColorStop(0,rgba(gc2,pA));g.addColorStop(1,"rgba(0,0,0,0)");ctx.fillStyle=g;ctx.fillRect(x-pR*2.2,y-pR*2.2-40,pR*4.4,pR*4.4);}
-  const f="rgba(4,10,22,.97)";ctx.save();ctx.translate(x-34,y-57);
-  const rr=(x,y,w,h,r)=>{ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();};
-  ctx.fillStyle=f;rr(38,24,10,28,4.5);ctx.fill();rr(40,19,6,8,2.5);ctx.fill();
-  ctx.beginPath();ctx.moveTo(46,21);ctx.bezierCurveTo(54,17,52,13,51,12);ctx.strokeStyle=f;ctx.lineWidth=2.8;ctx.lineCap="round";ctx.stroke();
-  ctx.fillStyle=f;rr(21,22,18,30,5.5);ctx.fill();
-  ctx.beginPath();ctx.arc(29,12,12,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle="rgba(5,15,38,.97)";rr(19,7,20,9,4);ctx.fill();
-  ctx.strokeStyle="rgba(70,150,220,.25)";ctx.lineWidth=1;rr(19,7,20,9,4);ctx.stroke();
-  ctx.strokeStyle=f;ctx.lineWidth=6.5;ctx.lineCap="round";
-  [[21,30,3,43],[39,30,56,41],[25,52,17,80],[34,52,42,80]].forEach(([x1,y1,x2,y2])=>{ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();});
-  ctx.fillStyle=f;
-  ctx.beginPath();ctx.moveTo(17,80);ctx.bezierCurveTo(0,96,-2,106,7,104);ctx.lineTo(20,84);ctx.closePath();ctx.fill();
-  ctx.beginPath();ctx.moveTo(42,80);ctx.bezierCurveTo(59,96,61,106,52,104);ctx.lineTo(39,84);ctx.closePath();ctx.fill();
-  ctx.restore();
+  if(pressT>0.05){const pR=lerp(0,40,Math.min(pressT*2,1)),pA=holding?pressT*.42:.1;const g=ctx.createRadialGradient(x,y,0,x,y,pR*2);g.addColorStop(0,rgba(gc2,pA));g.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g;ctx.fillRect(x-pR*2,y-pR*2,pR*4,pR*4);}
+  if(_svgDiver.complete&&_svgDiver.naturalWidth){
+    const dh=130,dw=Math.round(dh*864/1753);
+    ctx.drawImage(_svgDiver,x-dw/2,y-dh/2,dw,dh);
+  }
 }
 
 function draw(cv,ts){const ctx=cv.getContext("2d"),w=cv.width,h=cv.height;const depthT=Math.min(gs.depth/280,1),pressT=gs.pressure/100;drawBg(ctx,w,h,gs.depth);drawRays(ctx,w,h,gs.depth);drawPGlow(ctx,w,h,gs.pressure);drawSightings(ctx,w,h);drawAmbient(ctx,gs.ambient);drawEffects(ctx,w,h);drawDiver(ctx,w,h,ts,depthT,pressT,isHolding);drawBubbles(ctx,gs.bubbles);drawTexts(ctx,w,h);}
@@ -306,7 +304,7 @@ function renderReady(){
 }
 
 function renderPlaying(){
-  root.innerHTML=`<canvas id="gc" style="position:absolute;inset:0;width:100%;height:100%"></canvas><div style="position:absolute;inset:0;pointer-events:none;"><div style="position:absolute;top:14px;left:0;right:0;text-align:center;"><div id="dn" style="font-size:min(118px,22vw);font-weight:100;color:rgba(255,255,255,.88);letter-spacing:-5px;line-height:1;">0</div><div style="font-size:13px;letter-spacing:6px;color:rgba(118,178,218,.3);margin-top:2px;">METER</div><div id="mx" style="font-size:13px;letter-spacing:2px;color:rgba(78,138,178,.28);margin-top:6px;">max 0m</div></div><div style="position:absolute;top:14px;right:18px;text-align:right;"><div id="tm" style="font-size:22px;font-weight:100;letter-spacing:1px;color:rgba(255,255,255,.28);">--:--</div><div style="font-size:9px;letter-spacing:2px;color:rgba(48,88,118,.28);margin-top:3px;text-transform:uppercase;">resterend</div></div>${polar.connected?`<div style="position:absolute;top:16px;left:14px;font-size:10px;color:rgba(38,200,130,.5);letter-spacing:1px;" id="polar-hr"></div>`:""}<div style="position:absolute;right:16px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;"><span id="pl" style="font-size:8px;letter-spacing:2px;color:rgba(68,128,168,.3);text-transform:uppercase;transition:color .8s ease;">drang</span><div style="width:4px;height:105px;background:rgba(255,255,255,.05);border-radius:2px;position:relative;overflow:hidden;"><div id="pf" style="position:absolute;bottom:0;left:0;right:0;border-radius:2px;height:0%;transition:height .08s linear;"></div></div></div><div id="sl" style="position:absolute;bottom:58px;left:0;right:0;text-align:center;font-size:13px;letter-spacing:4px;text-transform:uppercase;color:rgba(58,98,128,.38);transition:color .3s;"></div><button id="eb" style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);padding:10px 24px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);border-radius:7px;color:rgba(98,158,194,.38);font-size:11px;letter-spacing:3px;cursor:pointer;text-transform:uppercase;pointer-events:all;font-family:inherit;">be&#235;indigen</button></div>`;
+  root.innerHTML=`<canvas id="gc" style="position:absolute;inset:0;width:100%;height:100%"></canvas><div style="position:absolute;inset:0;pointer-events:none;"><div style="position:absolute;top:14px;left:0;right:0;text-align:center;"><div id="dn" style="font-size:min(100px,19vw);font-weight:100;color:rgba(255,255,255,.88);letter-spacing:-2px;line-height:1;">0</div><div style="font-size:13px;letter-spacing:6px;color:rgba(118,178,218,.3);margin-top:2px;">METER</div><div id="mx" style="font-size:13px;letter-spacing:2px;color:rgba(78,138,178,.28);margin-top:6px;">max 0m</div></div><div style="position:absolute;top:14px;right:18px;text-align:right;"><div id="tm" style="font-size:22px;font-weight:100;letter-spacing:1px;color:rgba(255,255,255,.28);">--:--</div><div style="font-size:9px;letter-spacing:2px;color:rgba(48,88,118,.28);margin-top:3px;text-transform:uppercase;">resterend</div></div>${polar.connected?`<div style="position:absolute;top:16px;left:14px;font-size:10px;color:rgba(38,200,130,.5);letter-spacing:1px;" id="polar-hr"></div>`:""}<div style="position:absolute;right:16px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;"><span id="pl" style="font-size:8px;letter-spacing:2px;color:rgba(68,128,168,.3);text-transform:uppercase;transition:color .8s ease;">drang</span><div style="width:4px;height:105px;background:rgba(255,255,255,.05);border-radius:2px;position:relative;overflow:hidden;"><div id="pf" style="position:absolute;bottom:0;left:0;right:0;border-radius:2px;height:0%;transition:height .08s linear;"></div></div></div><div id="sl" style="position:absolute;bottom:58px;left:0;right:0;text-align:center;font-size:13px;letter-spacing:4px;text-transform:uppercase;color:rgba(58,98,128,.38);transition:color .3s;"></div><button id="eb" style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);padding:10px 24px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);border-radius:7px;color:rgba(98,158,194,.38);font-size:11px;letter-spacing:3px;cursor:pointer;text-transform:uppercase;pointer-events:all;font-family:inherit;">be&#235;indigen</button></div>`;
   document.getElementById("eb").addEventListener("mousedown",e=>e.stopPropagation());
   document.getElementById("eb").addEventListener("touchstart",e=>e.stopPropagation(),{passive:true});
   document.getElementById("eb").addEventListener("click",e=>{e.stopPropagation();endSession();});
