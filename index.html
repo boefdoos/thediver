@@ -81,7 +81,7 @@ const polar={connected:false,device:null,status:"disconnected"};
 // Detection — dual-path with personal calibration
 // Holds are post-EXHALE: hold ends with an INHALE (RR shortens, HR accelerates)
 // Baseline thresholds — overridden after calibration
-const CV_WINDOW=4;
+const CV_WINDOW=4, RMSSD_WINDOW=3;
 const REFRACTORY_MS=1200;
 let CV_HOLD_THR=0.016, FAST_START_DIFF=10, DIFF_THR=22, RMSSD_BREATHE_THR=14;
 let rrBuf=[],polarHoldState=false,prevRR=null,lastEndT=0;
