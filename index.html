@@ -372,8 +372,20 @@ function loop(ts){
 
 function startHold(){
   if(screen==="complete")return;
-  if(!gs.active){gs.active=true;screen="playing";gs.sessionStart=nowT();gs.lastTs=null;renderPlaying();setTimeout(()=>{const c=document.getElementById("gc");if(c){c.width=c.offsetWidth;c.height=c.offsetHeight;}rafId=requestAnimationFrame(loop);},20);return;}
-  if(!gs.holding){if(gs.releaseStart){const rd=(nowT()-gs.releaseStart)/1000;if(rd<STHR)gs.smallBreaths++;else gs.bigBreaths++;gs.releaseStart=null;}gs.holding=true;gs.holdStart=nowT();isHolding=true;}
+  if(!gs.active){
+    gs.active=true;screen="playing";gs.sessionStart=nowT();gs.lastTs=null;
+    renderPlaying();
+    setTimeout(()=>{const c=document.getElementById("gc");if(c){c.width=c.offsetWidth;c.height=c.offsetHeight;}rafId=requestAnimationFrame(loop);},20);
+    // If Polar triggered this, the hold is already active — set it immediately
+    if(polar.connected&&polarHoldState){
+      gs.holding=true;gs.holdStart=nowT();isHolding=true;
+    }
+    return;
+  }
+  if(!gs.holding){
+    if(gs.releaseStart){const rd=(nowT()-gs.releaseStart)/1000;if(rd<STHR)gs.smallBreaths++;else gs.bigBreaths++;gs.releaseStart=null;}
+    gs.holding=true;gs.holdStart=nowT();isHolding=true;
+  }
 }
 function endHold(){if(!gs.holding)return;gs.holding=false;isHolding=false;if(gs.holdStart){gs.holdTimes.push((nowT()-gs.holdStart)/1000);gs.holdStart=null;}gs.releaseStart=nowT();}
 function endSession(){
