@@ -440,7 +440,7 @@ function startHold(){
     gs.holding=true;gs.holdStart=nowT();isHolding=true;
   }
 }
-function endHold(){if(!gs.holding)return;gs.holding=false;isHolding=false;if(gs.holdStart){gs.holdTimes.push((nowT()-gs.holdStart)/1000);gs.holdStart=null;}gs.releaseStart=nowT();}
+function endHold(){if(!gs.holding)return;if(gs.sessionStart&&(nowT()-gs.sessionStart)<200)return;gs.holding=false;isHolding=false;if(gs.holdStart){gs.holdTimes.push((nowT()-gs.holdStart)/1000);gs.holdStart=null;}gs.releaseStart=nowT();}
 function endSession(){
   if(!gs.active)return;gs.active=false;gs.holding=false;isHolding=false;if(rafId)cancelAnimationFrame(rafId);
   if(gs.releaseStart){const rd=(nowT()-gs.releaseStart)/1000;if(rd<STHR)gs.smallBreaths++;else gs.bigBreaths++;}
