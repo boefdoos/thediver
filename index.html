@@ -85,7 +85,7 @@ const polar={connected:false,device:null,status:"disconnected"};
 //   fast_cv / slow_cv  high → variability returned → inhale
 // Run-length confirmation: N consecutive quiet beats before triggering hold start
 // Single-beat large diff: immediate hold-end (first inhale spike, very distinctive)
-const FAST_WIN=4, HOLD_CONFIRM=1, BREATHE_CONFIRM=2, REFRACTORY_MS=1500, MIN_HOLD_MS=2500;
+const FAST_WIN=4, HOLD_CONFIRM=1, BREATHE_CONFIRM=2, REFRACTORY_MS=8000, MIN_HOLD_MS=2500;
 let rrBuf=[],polarHoldState=false,lastEndT=0,quietStreak=0,breatheStreak=0,holdStartT=0;
 let RATIO_HOLD_THR=0.55, RATIO_BREATHE_THR=0.80, SINGLE_DIFF_THR=35;
 let baselineCV=0;
@@ -137,7 +137,10 @@ function polarHandleRR(ms){
 
   // Live debug
   const dbg=document.getElementById("polar-dbg");
-  if(dbg)dbg.textContent=`r=${ratio.toFixed(2)}`;
+  if(dbg){
+    const refLeft=Math.max(0,Math.ceil((REFRACTORY_MS-(nowT()-lastEndT))/1000));
+    dbg.textContent=`r=${ratio.toFixed(2)}${refLeft>0?` ⏸${refLeft}s`:''}`;  
+  }
 
   // Hold START: ratio drops vs baseline
   if(!polarHoldState&&gs.active&&!gs.holding&&(nowT()-lastEndT)>REFRACTORY_MS){
