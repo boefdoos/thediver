@@ -85,10 +85,10 @@ const polar={connected:false,device:null,status:"disconnected"};
 //   fast_cv / slow_cv  high → variability returned → inhale
 // Run-length confirmation: N consecutive quiet beats before triggering hold start
 // Single-beat large diff: immediate hold-end (first inhale spike, very distinctive)
-const FAST_WIN=4, HOLD_CONFIRM=2, REFRACTORY_MS=1200;
-let rrBuf=[],polarHoldState=false,lastEndT=0,quietStreak=0;
+const FAST_WIN=4, HOLD_CONFIRM=1, BREATHE_CONFIRM=2, REFRACTORY_MS=1500, MIN_HOLD_MS=2500;
+let rrBuf=[],polarHoldState=false,lastEndT=0,quietStreak=0,breatheStreak=0,holdStartT=0;
 let RATIO_HOLD_THR=0.55, RATIO_BREATHE_THR=0.80, SINGLE_DIFF_THR=35;
-let baselineCV=0; // measured during cal phase 1, used as stable reference
+let baselineCV=0;
 
 function computeCV(arr){
   if(arr.length<2)return 0;
@@ -99,7 +99,7 @@ function computeCV(arr){
 
 // ── CALIBRATION STATE ─────────────────────────────────────────────────────
 let calBuf=[],calBuf2=[],calDone=false,calPhase=0,calT0=0;
-let calHoldActive=false,calBreathingRatios=[],calHoldRatios=[];
+let calHoldActive=false,calBreathingRatios=[],calHoldRatios=[],calInhaleDiffs=[];
 const CAL_PHASE1=22000; // ms quiet breathing
 
 function polarHandleRR(ms){
@@ -113,12 +113,17 @@ function polarHandleRR(ms){
     if(nowT()-calT0>CAL_PHASE1)finishCal1();
     return;
   }
-  // Phase 2: collect ratio samples, label by hold/breathe
+  // Phase 2: collect ratio samples + capture inhale diff at hold release
   if(calPhase===2){
     if(rrBuf.length>=FAST_WIN){
       const ratio=baselineCV>0.001?computeCV(rrBuf.slice(-FAST_WIN))/baselineCV:1;
-      if(calHoldActive)calHoldRatios.push(ratio);
-      else calBreathingRatios.push(ratio);
+      const diff=Math.abs(ms-(rrBuf[rrBuf.length-2]||ms));
+      if(calHoldActive){calHoldRatios.push(ratio);}
+      else{
+        calBreathingRatios.push(ratio);
+        // Capture large diffs during breathing phase after hold = inhale signature
+        if(diff>15&&calHoldRatios.length>2)calInhaleDiffs.push(diff);
+      }
     }
     return;
   }
@@ -134,19 +139,23 @@ function polarHandleRR(ms){
   const dbg=document.getElementById("polar-dbg");
   if(dbg)dbg.textContent=`r=${ratio.toFixed(2)}`;
 
-  // Hold START: ratio drops vs baseline — confirmed over N beats
+  // Hold START: ratio drops vs baseline
   if(!polarHoldState&&gs.active&&!gs.holding&&(nowT()-lastEndT)>REFRACTORY_MS){
     if(ratio<RATIO_HOLD_THR){
       quietStreak++;
-      if(quietStreak>=HOLD_CONFIRM){polarHoldState=true;quietStreak=0;polarStartHold();}
+      if(quietStreak>=HOLD_CONFIRM){polarHoldState=true;quietStreak=0;breatheStreak=0;holdStartT=nowT();polarStartHold();}
     } else {quietStreak=0;}
   }
 
-  // Hold END: ratio recovers OR single spike
-  if(polarHoldState&&gs.holding){
-    if(ratio>RATIO_BREATHE_THR||diff>SINGLE_DIFF_THR){
-      polarHoldState=false;quietStreak=0;lastEndT=nowT();endHold();
-    }
+  // Hold END: 2 consecutive beats above threshold OR single large spike
+  // MIN_HOLD_MS prevents false end on first beats of hold
+  if(polarHoldState&&gs.holding&&(nowT()-holdStartT)>MIN_HOLD_MS){
+    if(diff>SINGLE_DIFF_THR){
+      polarHoldState=false;quietStreak=0;breatheStreak=0;lastEndT=nowT();endHold();
+    } else if(ratio>RATIO_BREATHE_THR){
+      breatheStreak++;
+      if(breatheStreak>=BREATHE_CONFIRM){polarHoldState=false;quietStreak=0;breatheStreak=0;lastEndT=nowT();endHold();}
+    } else {breatheStreak=0;}
   }
 }
 
@@ -178,17 +187,27 @@ function finishCal1(){
 }
 
 function finishCal2(){
+  const sorted=arr=>[...arr].sort((a,b)=>a-b);
+  const pct=(arr,p)=>{const s=sorted(arr);return s[Math.floor(s.length*p)]||s[s.length-1];};
+
   if(calHoldRatios.length>=3&&calBreathingRatios.length>=3){
-    const holdMean=calHoldRatios.reduce((a,b)=>a+b,0)/calHoldRatios.length;
-    const breathMean=calBreathingRatios.reduce((a,b)=>a+b,0)/calBreathingRatios.length;
-    // Set threshold at midpoint with margin
-    const mid=(holdMean+breathMean)/2;
-    RATIO_HOLD_THR=Math.max(0.25,Math.min(0.75,mid*0.90));
-    RATIO_BREATHE_THR=Math.max(0.50,Math.min(0.95,mid*1.15));
-    console.log(`Cal2: holdRatio=${holdMean.toFixed(2)} breathRatio=${breathMean.toFixed(2)} → THR=${RATIO_HOLD_THR.toFixed(2)}/${RATIO_BREATHE_THR.toFixed(2)}`);
+    const holdP75=pct(calHoldRatios,0.75);   // top of hold ratios = generous hold threshold
+    const breathP25=pct(calBreathingRatios,0.25); // bottom of breath ratios = conservative breathe threshold
+    RATIO_HOLD_THR=Math.max(0.25,Math.min(0.80,holdP75*1.05));
+    RATIO_BREATHE_THR=Math.max(0.45,Math.min(0.95,breathP25*0.92));
+    console.log(`Cal2: holdP75=${holdP75.toFixed(2)} breathP25=${breathP25.toFixed(2)} → THR=${RATIO_HOLD_THR.toFixed(2)}/${RATIO_BREATHE_THR.toFixed(2)}`);
   } else {
     console.log("Cal2: insufficient data, using defaults");
   }
+
+  // Set inhale diff threshold from actual measured inhale diffs
+  if(calInhaleDiffs.length>=2){
+    const s=sorted(calInhaleDiffs);
+    const medianInhale=s[Math.floor(s.length*0.5)];
+    SINGLE_DIFF_THR=Math.max(18,Math.min(80,Math.round(medianInhale*0.7)));
+    console.log(`Cal2: medianInhaleDiff=${medianInhale.toFixed(0)}ms → SINGLE_DIFF_THR=${SINGLE_DIFF_THR}ms`);
+  }
+
   calDone=true;calPhase=0;renderCalDone();
 }
 
@@ -223,15 +242,15 @@ function renderCal2(){
   <div style="position:absolute;inset:0;background:linear-gradient(180deg,#05101e,#020a16);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 24px;text-align:center;">
     <p style="font-size:11px;letter-spacing:5px;color:#2a4a62;text-transform:uppercase;margin-bottom:16px;">Kalibratie &#9829; Fase 2/2</p>
     <h2 style="font-size:24px;font-weight:100;color:rgba(255,255,255,.88);letter-spacing:1px;margin-bottom:14px;">Test-hold</h2>
-    <p style="font-size:15px;color:#3a6888;line-height:1.9;margin-bottom:6px;">Adem volledig <strong style="color:rgba(120,200,255,.8);">uit</strong>, houd vast.</p>
-    <p style="font-size:13px;color:#2a5878;margin-bottom:20px;">Druk en houd dit scherm vast<br>zolang je de adem inhoudt.</p>
+    <p style="font-size:15px;color:#3a6888;line-height:1.8;margin-bottom:6px;">Adem volledig <strong style="color:rgba(120,200,255,.8);">uit</strong>.<br>Druk en houd de knop vast<br>zolang je de adem inhoudt.<br>Laat los bij de eerste <strong style="color:rgba(120,200,255,.8);">inademing</strong>.</p>
+    <p style="font-size:12px;color:#2a4a5a;margin-bottom:20px;">Doe dit zo lang als comfortabel &mdash; hoe langer hoe beter.</p>
     <button id="hold-btn" style="width:160px;height:160px;border-radius:50%;background:rgba(58,138,181,.12);border:2px solid rgba(74,138,181,.4);color:rgba(100,180,220,.8);font-size:14px;letter-spacing:2px;cursor:pointer;font-family:inherit;transition:all .15s;user-select:none;-webkit-user-select:none;touch-action:none;">HOUD VAST</button>
     <p id="cal2-status" style="font-size:12px;color:rgba(60,120,160,.6);margin-top:18px;min-height:20px;"></p>
-    <p style="font-size:11px;color:#1a3a50;margin-top:8px;">Doe dit 2 keer, dan zijn we klaar.</p>
+    <p style="font-size:11px;color:#1a3a50;margin-top:8px;">Doe dit 2 keer voor nauwkeurige kalibratie.</p>
     <div style="position:absolute;top:16px;right:18px;font-size:10px;color:rgba(38,200,130,.5);" id="polar-hr"></div>
   </div>`;
 
-  let holdCount=0,holding=false;
+  let holdCount=0,holding=false,holdTimer=null;
   const btn=document.getElementById('hold-btn');
   const st=document.getElementById('cal2-status');
 
@@ -241,17 +260,23 @@ function renderCal2(){
     btn.style.background='rgba(38,180,100,.22)';
     btn.style.borderColor='rgba(38,180,100,.6)';
     btn.style.color='rgba(100,220,140,.9)';
-    st.textContent='Vasthouden...';
+    btn.textContent='VASTHOUDEN...';
+    st.textContent='';
+    // Live timer
+    let secs=0;
+    holdTimer=setInterval(()=>{secs++;st.textContent=`${secs}s vasthouden...`;},1000);
   }
   function endHoldCal(){
     if(!holding)return;
     holding=false;calHoldActive=false;
+    clearInterval(holdTimer);
     holdCount++;
     btn.style.background='rgba(58,138,181,.12)';
     btn.style.borderColor='rgba(74,138,181,.4)';
     btn.style.color='rgba(100,180,220,.8)';
-    if(holdCount>=2){st.textContent='Klaar!';setTimeout(finishCal2,600);}
-    else st.textContent=`Hold ${holdCount}/2 gedaan \u2714 Nog \u00e9\u00e9n keer.`;
+    btn.textContent='HOUD VAST';
+    if(holdCount>=2){st.textContent='Klaar!';setTimeout(finishCal2,800);}
+    else st.textContent=`Hold ${holdCount}/2 gedaan \u2714  Nog \u00e9\u00e9n keer — adem normaal even bij.`;
   }
 
   btn.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation();startHoldCal();});
