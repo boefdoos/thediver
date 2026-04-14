@@ -137,7 +137,7 @@ function polarHandleRR(ms){
   if(!polarHoldState&&!gs.holding&&(nowT()-lastEndT)>REFRACTORY_MS){
     if(ratio<RATIO_HOLD_THR){
       quietStreak++;
-      if(quietStreak>=HOLD_CONFIRM){polarHoldState=true;quietStreak=0;startHold();}
+      if(quietStreak>=HOLD_CONFIRM){polarHoldState=true;quietStreak=0;polarStartHold();}
     } else {quietStreak=0;}
   }
 
@@ -146,6 +146,19 @@ function polarHandleRR(ms){
     if(ratio>RATIO_BREATHE_THR||diff>SINGLE_DIFF_THR){
       polarHoldState=false;quietStreak=0;lastEndT=nowT();endHold();
     }
+  }
+}
+
+// Polar always starts game + hold together — no two-step ambiguity
+function polarStartHold(){
+  if(!gs.active){
+    gs.active=true;screen="playing";gs.sessionStart=nowT();gs.lastTs=null;
+    renderPlaying();
+    setTimeout(()=>{const c=document.getElementById("gc");if(c){c.width=c.offsetWidth;c.height=c.offsetHeight;}rafId=requestAnimationFrame(loop);},20);
+  }
+  if(!gs.holding){
+    if(gs.releaseStart){const rd=(nowT()-gs.releaseStart)/1000;if(rd<STHR)gs.smallBreaths++;else gs.bigBreaths++;gs.releaseStart=null;}
+    gs.holding=true;gs.holdStart=nowT();isHolding=true;
   }
 }
 
