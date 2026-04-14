@@ -275,7 +275,7 @@ function renderCalDone(){
     <button id="start-btn" style="padding:13px 32px;background:rgba(58,138,181,.18);border:1px solid rgba(74,138,181,.45);border-radius:8px;color:#5a9ac5;font-size:13px;letter-spacing:3px;cursor:pointer;text-transform:uppercase;font-family:inherit;">Starten</button>
   </div>`;
   const sb=document.getElementById('start-btn');
-  if(sb)sb.addEventListener('click',()=>renderReady());
+  if(sb)sb.addEventListener('click',()=>{screen='ready';startHold();});
 }
 
 function parsePolarHR(data){
