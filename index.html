@@ -85,9 +85,10 @@ const polar={connected:false,device:null,status:"disconnected"};
 //   fast_cv / slow_cv  high → variability returned → inhale
 // Run-length confirmation: N consecutive quiet beats before triggering hold start
 // Single-beat large diff: immediate hold-end (first inhale spike, very distinctive)
-const FAST_WIN=5, SLOW_WIN=18, HOLD_CONFIRM=3, REFRACTORY_MS=1200;
+const FAST_WIN=4, HOLD_CONFIRM=2, REFRACTORY_MS=1200;
 let rrBuf=[],polarHoldState=false,lastEndT=0,quietStreak=0;
-let RATIO_HOLD_THR=0.45, RATIO_BREATHE_THR=0.72, SINGLE_DIFF_THR=35;
+let RATIO_HOLD_THR=0.55, RATIO_BREATHE_THR=0.80, SINGLE_DIFF_THR=35;
+let baselineCV=0; // measured during cal phase 1, used as stable reference
 
 function computeCV(arr){
   if(arr.length<2)return 0;
@@ -102,7 +103,7 @@ let calHoldActive=false,calBreathingRatios=[],calHoldRatios=[];
 const CAL_PHASE1=22000; // ms quiet breathing
 
 function polarHandleRR(ms){
-  rrBuf.push(ms);if(rrBuf.length>SLOW_WIN+2)rrBuf.shift();
+  rrBuf.push(ms);if(rrBuf.length>FAST_WIN+2)rrBuf.shift();
   const bpm=Math.round(60000/ms);
   const hel=document.getElementById("polar-hr");if(hel)hel.textContent=bpm+" bpm";
 
@@ -114,34 +115,34 @@ function polarHandleRR(ms){
   }
   // Phase 2: collect ratio samples, label by hold/breathe
   if(calPhase===2){
-    if(rrBuf.length>=SLOW_WIN){
-      const r=computeCV(rrBuf.slice(-FAST_WIN))/(computeCV(rrBuf.slice(-SLOW_WIN))||0.001);
-      if(calHoldActive)calHoldRatios.push(r);
-      else calBreathingRatios.push(r);
+    if(rrBuf.length>=FAST_WIN){
+      const ratio=baselineCV>0.001?computeCV(rrBuf.slice(-FAST_WIN))/baselineCV:1;
+      if(calHoldActive)calHoldRatios.push(ratio);
+      else calBreathingRatios.push(ratio);
     }
     return;
   }
   if(!calDone)return;
-  if(rrBuf.length<SLOW_WIN)return;
+  if(rrBuf.length<FAST_WIN)return;
 
   const fastCV=computeCV(rrBuf.slice(-FAST_WIN));
-  const slowCV=computeCV(rrBuf.slice(-SLOW_WIN));
-  const ratio=slowCV>0.001?fastCV/slowCV:1;
+  // Compare against fixed baseline (not drifting slow window)
+  const ratio=baselineCV>0.001?fastCV/baselineCV:1;
   const diff=Math.abs(ms-(rrBuf[rrBuf.length-2]||ms));
 
-  // Live debug display during play
+  // Live debug
   const dbg=document.getElementById("polar-dbg");
   if(dbg)dbg.textContent=`r=${ratio.toFixed(2)}`;
 
-  // Hold START: ratio drops (signal has gone flat) — confirmed over N beats
-  if(!polarHoldState&&!gs.holding&&(nowT()-lastEndT)>REFRACTORY_MS){
+  // Hold START: ratio drops vs baseline — confirmed over N beats
+  if(!polarHoldState&&gs.active&&!gs.holding&&(nowT()-lastEndT)>REFRACTORY_MS){
     if(ratio<RATIO_HOLD_THR){
       quietStreak++;
       if(quietStreak>=HOLD_CONFIRM){polarHoldState=true;quietStreak=0;polarStartHold();}
     } else {quietStreak=0;}
   }
 
-  // Hold END: ratio rises (variability returns = first inhale) OR single spike
+  // Hold END: ratio recovers OR single spike
   if(polarHoldState&&gs.holding){
     if(ratio>RATIO_BREATHE_THR||diff>SINGLE_DIFF_THR){
       polarHoldState=false;quietStreak=0;lastEndT=nowT();endHold();
@@ -169,19 +170,22 @@ function finishCal1(){
   const meanDiff=diffs.reduce((a,b)=>a+b,0)/diffs.length;
   const sdDiff=Math.sqrt(diffs.reduce((s,v)=>s+(v-meanDiff)**2,0)/diffs.length);
   SINGLE_DIFF_THR=Math.max(20,Math.min(80,Math.round(meanDiff*2.2+sdDiff)));
-  console.log(`Cal1: meanDiff=${meanDiff.toFixed(1)}ms → SINGLE_DIFF_THR=${SINGLE_DIFF_THR}ms`);
+  // Store stable baseline CV for ratio detection
+  baselineCV=computeCV(rrs);
+  console.log(`Cal1: baselineCV=${baselineCV.toFixed(4)} meanDiff=${meanDiff.toFixed(1)}ms → SINGLE_DIFF_THR=${SINGLE_DIFF_THR}ms`);
   calPhase=2;calBreathingRatios=[];calHoldRatios=[];calHoldActive=false;
   renderCal2();
 }
 
 function finishCal2(){
-  if(calHoldRatios.length>=4&&calBreathingRatios.length>=4){
+  if(calHoldRatios.length>=3&&calBreathingRatios.length>=3){
     const holdMean=calHoldRatios.reduce((a,b)=>a+b,0)/calHoldRatios.length;
     const breathMean=calBreathingRatios.reduce((a,b)=>a+b,0)/calBreathingRatios.length;
+    // Set threshold at midpoint with margin
     const mid=(holdMean+breathMean)/2;
-    RATIO_HOLD_THR=Math.max(0.30,Math.min(0.65,mid*0.88));
-    RATIO_BREATHE_THR=Math.max(0.55,Math.min(0.90,mid*1.22));
-    console.log(`Cal2: hold=${holdMean.toFixed(2)} breath=${breathMean.toFixed(2)} → THR=${RATIO_HOLD_THR.toFixed(2)}/${RATIO_BREATHE_THR.toFixed(2)}`);
+    RATIO_HOLD_THR=Math.max(0.25,Math.min(0.75,mid*0.90));
+    RATIO_BREATHE_THR=Math.max(0.50,Math.min(0.95,mid*1.15));
+    console.log(`Cal2: holdRatio=${holdMean.toFixed(2)} breathRatio=${breathMean.toFixed(2)} → THR=${RATIO_HOLD_THR.toFixed(2)}/${RATIO_BREATHE_THR.toFixed(2)}`);
   } else {
     console.log("Cal2: insufficient data, using defaults");
   }
