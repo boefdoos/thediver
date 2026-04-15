@@ -512,9 +512,16 @@ function renderReady(){
   root.querySelectorAll("[data-t]").forEach(btn=>{btn.addEventListener("click",e=>{e.stopPropagation();timeLimit=parseInt(btn.dataset.t)*60;root.querySelectorAll("[data-t]").forEach(b=>{const s=b.dataset.t===btn.dataset.t;b.style.background=s?"rgba(74,138,181,0.22)":"transparent";b.style.borderColor=s?"rgba(74,138,181,0.55)":"rgba(255,255,255,0.09)";b.style.color=s?"#5a9ac5":"rgba(100,140,170,0.4)";});});});
   const sb=document.getElementById("scores-btn");if(sb)sb.addEventListener("click",e=>{e.stopPropagation();renderScores();});
   const pb=document.getElementById("polar-btn");
-  if(pb){pb.addEventListener("mousedown",e=>{e.stopPropagation();e.preventDefault();});pb.addEventListener("touchstart",e=>{e.stopPropagation();e.preventDefault();},{passive:false});pb.addEventListener("click",e=>{e.stopPropagation();if(!polar.connected&&polar.status!=="connecting")connectPolar();});updatePolarUI();}
+  if(pb){
+    pb.addEventListener("touchend",e=>{e.stopPropagation();e.preventDefault();if(!polar.connected&&polar.status!=="connecting")connectPolar();},{passive:false});
+    pb.addEventListener("click",e=>{e.stopPropagation();if(!polar.connected&&polar.status!=="connecting")connectPolar();});
+    updatePolarUI();
+  }
   const sgb=document.getElementById("start-game-btn");
-  if(sgb){sgb.addEventListener("mousedown",e=>{e.stopPropagation();e.preventDefault();});sgb.addEventListener("touchstart",e=>{e.stopPropagation();e.preventDefault();},{passive:false});sgb.addEventListener("click",e=>{e.stopPropagation();startHold();});}
+  if(sgb){
+    sgb.addEventListener("touchend",e=>{e.stopPropagation();e.preventDefault();startHold();},{passive:false});
+    sgb.addEventListener("click",e=>{e.stopPropagation();startHold();});
+  }
 }
 
 function renderPlaying(){
