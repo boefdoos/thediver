@@ -358,7 +358,12 @@ const root=document.getElementById("root");
 function effectivePR(){const r=gs.holdTimes.slice(-5);if(!r.length)return BASE_PR;return BASE_PR*Math.max(0.60,1-r.reduce((a,b)=>a+b,0)/r.length*0.014);}
 function descentSpd(){if(!gs.holdStart)return DESCENT_BASE;return DESCENT_BASE+Math.min((nowT()-gs.holdStart)/1000*DESCENT_ACC,DESCENT_MAX_BONUS);}
 function ascentSpd(){if(!gs.releaseStart)return ASCENT_SLOW;return ASCENT_SLOW+ASCENT_FAST*Math.exp(-(nowT()-gs.releaseStart)/1000*ASCENT_DECAY);}
-function diverGlowCol(dt){if(dt<0.5)return lC([65,150,255],[38,220,185],dt*2);return lC([38,220,185],[200,255,230],(dt-0.5)*2);}
+function diverGlowCol(dt,pt){
+  // Depth tint: surface blue → deep cyan → near-white abyss
+  const depthCol=dt<0.5?lC([65,150,255],[38,220,185],dt*2):lC([38,220,185],[200,255,230],(dt-0.5)*2);
+  // Pressure tint bleeds in: calm cool blue → urgent orange-red
+  return lC(depthCol,[255,80,20],Math.pow(pt,2)*0.65);
+}
 
 function triggerSighting(w,h){
   if(gs.sightingDone)return;gs.sightingDone=true;
@@ -421,22 +426,42 @@ function drawBubbles(ctx,bs){for(const b of bs){if(b.opacity<.01)continue;ctx.sa
 function drawDiver(ctx,w,h,ts,depthT,pressT,holding){
   const cx=w/2,cy=h*.5,floatY=holding?0:Math.sin(ts*.002)*lerp(1.2,3.0,depthT);
   const x=cx,y=cy+floatY;
-  const dgc=diverGlowCol(depthT),gc2=lC([52,142,232],[192,56,20],pressT);
+  const dgc=diverGlowCol(depthT,pressT),gc2=lC([52,142,232],[220,44,10],Math.pow(pressT,1.2));
+  // Depth glow
   if(depthT>0.03){
-    for(const[r,a] of [[lerp(0,55,depthT),lerp(0,.35,depthT)],[lerp(0,28,depthT),lerp(0,.68,depthT)]]){
+    for(const[r,a] of [[lerp(0,62,depthT),lerp(0,.38,depthT)],[lerp(0,32,depthT),lerp(0,.72,depthT)]]){
       if(r<1)continue;const g=ctx.createRadialGradient(x,y,0,x,y,r*2.2);g.addColorStop(0,rgba(dgc,a));g.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g;ctx.fillRect(x-r*2.5,y-r*2.5,r*5,r*5);
     }
   }
-  if(pressT>0.05){const pR=lerp(0,40,Math.min(pressT*2,1)),pA=holding?pressT*.42:.1;const g=ctx.createRadialGradient(x,y,0,x,y,pR*2);g.addColorStop(0,rgba(gc2,pA));g.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g;ctx.fillRect(x-pR*2,y-pR*2,pR*4,pR*4);}
-  // Diver drawn head-down (flipped vertically)
-  const f='rgba(4,10,22,.97)';ctx.save();ctx.translate(x,y);ctx.scale(1,-1);ctx.translate(-34,-57);
+  // Pressure glow — grows and warms as drang builds
+  if(pressT>0.04){
+    const pv2=Math.pow(pressT,1.2);
+    const pR=lerp(0,55,Math.min(pv2*1.4,1)),pA=holding?pv2*.5:.12;
+    const g=ctx.createRadialGradient(x,y,0,x,y,pR*2);g.addColorStop(0,rgba(gc2,pA));g.addColorStop(0.4,rgba(gc2,pA*.4));g.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=g;ctx.fillRect(x-pR*2,y-pR*2,pR*4,pR*4);
+    // Pulsing ring at high drang
+    if(pressT>0.6){
+      const pulse=0.5+0.5*Math.sin(nowT()*0.008);
+      const rr2=pR*1.4+pulse*8;
+      ctx.beginPath();ctx.arc(x,y,rr2,0,Math.PI*2);
+      ctx.strokeStyle=rgba(gc2,pv2*0.18*pulse);
+      ctx.lineWidth=1.5;ctx.stroke();
+    }
+  }
+  // Diver upright, color shifts with pressure
+  const pv=Math.pow(pressT,1.4);
+  const dc=lC([4,10,22],[38,8,4],pv); // near-black → very dark red-brown under max drang
+  const f=`rgba(${dc[0]},${dc[1]},${dc[2]},.97)`;ctx.save();ctx.translate(x-34,y-57);
   const rr=(x,y,w,h,r)=>{ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();};
   ctx.fillStyle=f;rr(38,24,10,28,4.5);ctx.fill();rr(40,19,6,8,2.5);ctx.fill();
   ctx.beginPath();ctx.moveTo(46,21);ctx.bezierCurveTo(54,17,52,13,51,12);ctx.strokeStyle=f;ctx.lineWidth=2.8;ctx.lineCap='round';ctx.stroke();
   ctx.fillStyle=f;rr(21,22,18,30,5.5);ctx.fill();
   ctx.beginPath();ctx.arc(29,12,12,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='rgba(5,15,38,.97)';rr(19,7,20,9,4);ctx.fill();
-  ctx.strokeStyle='rgba(70,150,220,.25)';ctx.lineWidth=1;rr(19,7,20,9,4);ctx.stroke();
+  // Mask lens: blue at rest, shifts to amber under pressure
+  const lc=lC([5,15,38],[28,18,4],pv);
+  ctx.fillStyle=`rgba(${lc[0]},${lc[1]},${lc[2]},.97)`;rr(19,7,20,9,4);ctx.fill();
+  const sc=lC([70,150,220],[220,140,40],pv);
+  ctx.strokeStyle=`rgba(${sc[0]},${sc[1]},${sc[2]},.35)`;ctx.lineWidth=1;rr(19,7,20,9,4);ctx.stroke();
   ctx.strokeStyle=f;ctx.lineWidth=6.5;ctx.lineCap='round';
   [[21,30,3,43],[39,30,56,41],[25,52,17,80],[34,52,42,80]].forEach(([x1,y1,x2,y2])=>{ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();});
   ctx.fillStyle=f;
