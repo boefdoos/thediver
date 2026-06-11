@@ -483,15 +483,15 @@ function loop(ts){
     gs.pressure=Math.min(100,gs.pressure+effectivePR()*dt);
     const cv=document.getElementById("gc");
     if(cv){
-      // Bubbles stream from diver head during descent
-      const bx=cv.width/2,by=cv.height*.5;
+      // Bubbles stream from diver head (top of silhouette) during descent
+      const bx=cv.width/2,by=cv.height*.5-48;
       const rate=0.4+gs.pressure/100*1.2;
       if(Math.random()<rate*dt*12){
-        gs.bubbles.push({x:bx+(Math.random()-.5)*14,y:by-(Math.random()*10),r:Math.random()*2.2+.5,opacity:.35+Math.random()*.35,vx:(Math.random()-.5)*8,vy:-(28+Math.random()*22)});
+        gs.bubbles.push({x:bx+(Math.random()-.5)*14,y:by+(Math.random()*8),r:Math.random()*2.2+.5,opacity:.35+Math.random()*.35,vx:(Math.random()-.5)*8,vy:-(28+Math.random()*22)});
       }
       // Occasional larger bubble at high pressure
       if(gs.pressure>40&&Math.random()<(gs.pressure/100)*dt*4){
-        gs.bubbles.push({x:bx+(Math.random()-.5)*10,y:by-(Math.random()*8),r:Math.random()*3.5+1.5,opacity:.2+Math.random()*.25,vx:(Math.random()-.5)*5,vy:-(18+Math.random()*14)});
+        gs.bubbles.push({x:bx+(Math.random()-.5)*10,y:by+(Math.random()*6),r:Math.random()*3.5+1.5,opacity:.2+Math.random()*.25,vx:(Math.random()-.5)*5,vy:-(18+Math.random()*14)});
       }
     }
   }
