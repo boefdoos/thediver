@@ -478,7 +478,23 @@ function updAmb(dt,d,cv){const zi=Math.min(zI(d),AMB.length-1),cfg=AMB[zi],w=cv.
 
 function loop(ts){
   if(!gs.active)return;if(!gs.lastTs)gs.lastTs=ts;const dt=Math.min((ts-gs.lastTs)/1000,.05);gs.lastTs=ts;const prev=gs.depth;
-  if(gs.holding){gs.depth+=descentSpd()*dt;gs.pressure=Math.min(100,gs.pressure+effectivePR()*dt);const cv=document.getElementById("gc");if(cv&&Math.random()<(.25+gs.pressure/100*2)*dt)gs.bubbles.push({x:cv.width/2+(Math.random()-.5)*28,y:cv.height*.52+(Math.random()-.5)*8,r:Math.random()*2.4+.4,opacity:.25+Math.random()*.4,vx:(Math.random()-.5)*10,vy:-(22+Math.random()*34)});}
+  if(gs.holding){
+    gs.depth+=descentSpd()*dt;
+    gs.pressure=Math.min(100,gs.pressure+effectivePR()*dt);
+    const cv=document.getElementById("gc");
+    if(cv){
+      // Bubbles stream from diver head during descent
+      const bx=cv.width/2,by=cv.height*.5;
+      const rate=0.4+gs.pressure/100*1.2;
+      if(Math.random()<rate*dt*12){
+        gs.bubbles.push({x:bx+(Math.random()-.5)*14,y:by-(Math.random()*10),r:Math.random()*2.2+.5,opacity:.35+Math.random()*.35,vx:(Math.random()-.5)*8,vy:-(28+Math.random()*22)});
+      }
+      // Occasional larger bubble at high pressure
+      if(gs.pressure>40&&Math.random()<(gs.pressure/100)*dt*4){
+        gs.bubbles.push({x:bx+(Math.random()-.5)*10,y:by-(Math.random()*8),r:Math.random()*3.5+1.5,opacity:.2+Math.random()*.25,vx:(Math.random()-.5)*5,vy:-(18+Math.random()*14)});
+      }
+    }
+  }
   else{gs.depth=Math.max(0,gs.depth-ascentSpd()*dt);gs.pressure=Math.max(0,gs.pressure*Math.pow(PDECAY,dt));const cv=document.getElementById("gc");if(cv&&gs.depth>0&&Math.random()<.2*dt*9)gs.bubbles.push({x:cv.width/2+(Math.random()-.5)*18,y:cv.height*.52+(Math.random()-.5)*8,r:Math.random()*1.2+.2,opacity:.1+Math.random()*.18,vx:(Math.random()-.5)*5,vy:-(12+Math.random()*15)});}
   gs.maxDepth=Math.max(gs.maxDepth,gs.depth);
   const cv=document.getElementById("gc");if(cv&&gs.depth>prevBest&&prevBest>10&&!gs.sightingDone)triggerSighting(cv.width,cv.height);
@@ -561,7 +577,7 @@ function renderComplete(){
   if(!finalStats)return;const allByDepth=[...sessions].sort((a,b)=>b.maxDepth-a.maxDepth);const rank=allByDepth.findIndex(s=>s===finalStats)+1;const isRec=finalStats.newRecord||rank===1;const tot=finalStats.smallBreaths+finalStats.bigBreaths,sPct=tot?Math.round(finalStats.smallBreaths/tot*100):0;const rec=sessions.slice(-15),maxD=Math.max(...rec.map(s=>s.maxDepth),1);
   const msB=(finalStats.milestones||[]).map(d=>{const m=MS.find(x=>x.d===d);if(!m)return"";return`<span style="font-size:10px;padding:4px 9px;border-radius:4px;background:rgba(${m.c[0]},${m.c[1]},${m.c[2]},.13);color:rgba(${m.c[0]},${m.c[1]},${m.c[2]},.78);letter-spacing:1px;">${d}m</span>`;}).join("");
   const rankStr=isRec&&sessions.length>1?`<div style="font-size:12px;color:#f0c040;margin-top:8px;letter-spacing:2px;">\u2728 persoonlijk record</div>`:rank<=3&&sessions.length>1?`<div style="font-size:12px;color:#4a9ab5;margin-top:8px;letter-spacing:2px;">top ${rank} ooit</div>`:sessions.length>1?`<div style="font-size:11px;color:rgba(60,100,130,.5);margin-top:8px;letter-spacing:1px;">positie ${rank} van ${sessions.length}</div>`:"";
-  root.innerHTML=`<div style="position:absolute;inset:0;background:linear-gradient(180deg,#040d1a,#020508);display:flex;flex-direction:column;align-items:center;overflow-y:auto;padding:28px 22px 22px;text-align:center;"><p style="font-size:11px;letter-spacing:5px;color:#2a4a62;text-transform:uppercase;margin-bottom:12px;">Sessie afgerond</p><div style="margin-bottom:20px;"><div style="font-size:80px;font-weight:100;color:rgba(255,255,255,.92);line-height:1;">${finalStats.maxDepth}</div><div style="font-size:12px;letter-spacing:4px;color:rgba(80,140,170,.8);margin-top:5px;">METER DIEPTE</div>${rankStr}</div>${(finalStats.milestones||[]).length?`<div style="width:100%;max-width:290px;margin-bottom:14px;"><div style="font-size:9px;letter-spacing:3px;color:#2a4a60;text-transform:uppercase;margin-bottom:8px;">Ontdekt</div><div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:center;">${msB}</div></div>`:""}<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:290px;margin-bottom:12px;">${[["Duur",finalStats.duration+"s"],["Max. hold",finalStats.maxHold+"s"],["Gem. hold",finalStats.avgHold+"s"],["Kleine adem",sPct+"%"]].map(([l,v])=>`<div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:10px 12px;"><div style="font-size:20px;font-weight:200;color:rgba(255,255,255,.85);">${v}</div><div style="font-size:9px;letter-spacing:1.5px;color:rgba(70,120,155,.8);">${l}</div></div>`).join("")}</div>${rec.length>=2?`<div style="width:100%;max-width:290px;margin-bottom:14px;">
+  root.innerHTML=`<div style="position:absolute;inset:0;background:linear-gradient(180deg,#040d1a,#020508);display:flex;flex-direction:column;align-items:center;overflow-y:auto;padding:28px 22px 22px;text-align:center;"><p style="font-size:11px;letter-spacing:5px;color:#2a4a62;text-transform:uppercase;margin-bottom:12px;">Sessie afgerond</p><div style="margin-bottom:20px;"><div style="font-size:80px;font-weight:100;color:rgba(255,255,255,.92);line-height:1;">${finalStats.maxDepth}</div><div style="font-size:12px;letter-spacing:4px;color:rgba(80,140,170,.8);margin-top:5px;">MAXIMUM DIEPTE</div>${rankStr}</div>${(finalStats.milestones||[]).length?`<div style="width:100%;max-width:290px;margin-bottom:14px;"><div style="font-size:9px;letter-spacing:3px;color:#2a4a60;text-transform:uppercase;margin-bottom:8px;">Ontdekt</div><div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:center;">${msB}</div></div>`:""}<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:290px;margin-bottom:12px;">${[["Duur",finalStats.duration+"s"],["Max. hold",finalStats.maxHold+"s"],["Gem. hold",finalStats.avgHold+"s"],["Kleine adem",sPct+"%"]].map(([l,v])=>`<div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:10px 12px;"><div style="font-size:20px;font-weight:200;color:rgba(255,255,255,.85);">${v}</div><div style="font-size:9px;letter-spacing:1.5px;color:rgba(70,120,155,.8);">${l}</div></div>`).join("")}</div>${rec.length>=2?`<div style="width:100%;max-width:290px;margin-bottom:14px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
         <div style="font-size:9px;letter-spacing:3px;color:#2a4a60;text-transform:uppercase;">Progressie</div>
         <div style="font-size:9px;color:rgba(60,100,130,.55);">max diepte · ${rec.length} sessies</div>
